@@ -2,7 +2,7 @@
 name = "raft"
 version = "0.1.0"
 description = ""
-authors = ["Amod Wani <awani2@ext.uber.com>"]
+authors = ["Amod Wani <amodwani04@gmail.com>"]
 
 [tool.poetry.dependencies]
 python = "^3.9"
