@@ -1,5 +1,6 @@
 import asyncio
 import sys
+import ujson
 from random import randint
 import logging
 from codecs import StreamReader,StreamWriter
@@ -8,21 +9,24 @@ from typing import Dict, List, Tuple
 PRIMARY = 'primary'
 SECONDARY = 'secondary'
 NO_IDEA = 'no_idea'
+UNAVAILABLE = 'unavailable'
 
 class Node():
     def __init__(self,host:str,
                 port:int,
-                peers={}) -> None:
+                peers = {}) -> None:
         self.host = host
         self.port = port
         self.name = host+':'+str(port)
-        self.peers = peers.update({self.name:NO_IDEA})
+        peers.update({self.name:NO_IDEA})
+        self.peers = peers
 
     async def _loop_server(self,server_map ) :
         result = await asyncio.gather(self.send_msg(
                 message='ping',
                 host=host,port=port
                 ) for name,(host,port) in server_map.items())
+        logging.info(f'_loop_server=> {result}')
         return result
 
     async def send_msg(self,message:str,
@@ -38,7 +42,7 @@ class Node():
                 return f'{host}:{port}',data.decode('utf8')
             except Exception as e:
                 logging.error(f'No response from server {e}')
-                return f'{host}:{port}',f'Error {e}'
+                return f'{host}:{port}',f'{UNAVAILABLE} :: {e}'
 
     async def handle_client(self,
                         reader:StreamReader,
@@ -57,9 +61,9 @@ class Node():
                 host,port = data.split(':')
                 server_name ,server_res = await self.send_msg(message='ping',
                                                  host=host,port=int(port))
-                logging.error( server_res)
                 if server_res == 'pong':
-                    self.peers[host+':'+port] = 'Secondary'
+                    self.peers[host+':'+port] = NO_IDEA
+                    await self.send_msg(message=f'sync_peers|{str(self.peers)}',host=host,port=port)
                     response = 'Server joined the network'
                     logging.info(f'Server joined the network {host}:{port}')
                 else:
@@ -73,6 +77,9 @@ class Node():
                 response = str(self.peers)
             elif request.startswith('check_peers'):
                 response = str(self.peers)
+            elif request.startswith('sync_peers'):
+                command, peers = request.split('|')
+                self.peers = ujson.loads(peers)
             else:
                 response = str(f'Got request {request}')
             logging.info('response=>'+response)
@@ -87,9 +94,16 @@ class Node():
 
     async def heart_beat(self) -> None:
         while True:
+            beat_peer = {}
             server_status = await self._loop_server(self.peers)
+            logging.info('Heart beat')
             for name,status in server_status:
-                self.peers[name] = status
+                if status.startswith(UNAVAILABLE):
+                    logging.error('heartbeat failed for => {name} removing...')
+                    continue
+                beat_peer[name] = status
+            self.peers = beat_peer
+            logging.info(f'heart beat {str(self.peers)}')
             await asyncio.sleep(10)
 
     async def run_server_heartbeat(self):

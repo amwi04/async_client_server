@@ -1,7 +1,5 @@
 import asyncio
-import aiohttp
-
-SERVER_ADDRESS = ('localhost', 9000)
+import sys
 
 event_loop = asyncio.get_event_loop()
 
@@ -25,7 +23,7 @@ async def echo_client(address):
 
 try:
     event_loop.run_until_complete(
-        echo_client(SERVER_ADDRESS)
+        echo_client(['localhost',sys.argv[1]])
     )
 finally:
     print('closing event loop')
