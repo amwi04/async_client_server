@@ -1,39 +1,52 @@
-import asyncio, aiohttp, sys
+import asyncio
+import sys
 from random import randint
 import logging
 from codecs import StreamReader,StreamWriter
+from typing import List, Tuple
+
+PRIMARY = 'primary'
+SECONDARY = 'secondary'
+NO_IDEA = 'no_idea'
 
 class Node():
     def __init__(self,host:str,
-                port:int,is_master=True,
+                port:int,
                 peers={}) -> None:
         self.host = host
         self.port = port
         self.name = host+':'+str(port)
-        self.is_master = is_master
         self.peers = peers
 
-    async def check_peers(self) -> None:
+    async def _loop_server(self) -> List[Tuple[Tuple[str,int], str]]:
+        result = await asyncio.gather(self.send_msg(
+                message='ping',
+                host=host,port=port
+                ) for name,(host,port) in self.peers.items())
+        return result
+
+    async def heart_beat(self) -> None:
         peer = {}
-        for name,(host,port) in self.peers.items():
-            server_res = await self.send_msg(message='ping',host=host,port=port)
-            if server_res == 'Error':
-                logging.error(f'Server not reachable removing from peers => {name}')
-                continue
-            peer[name] = [host,port]
-        self.peers = peer
+        while True:
+            await self._loop_server()
+            await asyncio.sleep(10)
 
     async def send_msg(self,message:str,
-                        host:str,port:int) -> str:
-        try:
-            reader, writer = await asyncio.open_connection(host,port)
-            writer.write(str.encode(message))
-            await writer.drain()
-            data = await reader.read(255)
-            return data.decode('utf8')
-        except Exception as e:
-            logging.error('No response from server')
-            return 'Error'
+                        host:str,port:int) -> Tuple[
+                                            Tuple[str,int], str
+                                            ]:
+        if f'{host}:{port}' == self.name:
+            return (host,port),'pong'
+        else:
+            try:
+                reader, writer = await asyncio.open_connection(host,port)
+                writer.write(str.encode(message))
+                await writer.drain()
+                data = await reader.read(255)
+                return (host,port),data.decode('utf8')
+            except Exception as e:
+                logging.error(f'No response from server {e}')
+                return (host,port),f'Error {e}'
 
     async def handle_client(self,
                         reader:StreamReader,
@@ -54,7 +67,7 @@ class Node():
                                                  host=host,port=int(port))
                 logging.info('join server response='+server_res)
                 if server_res == 'pong':
-                    self.peers[host+':'+port] = [host,int(port)]
+                    self.peers[host+':'+port] = 'Secondary'
                     response = 'Server joined the network'
                 else:
                     response = 'Server did not respond with pong'
@@ -65,11 +78,9 @@ class Node():
             elif request.startswith('peers_list'):
                 response = str(self.peers)
             elif request.startswith('check_peers'):
-                await self.check_peers()
                 response = str(self.peers)
             else:
                 response = str(f'Got request {request}')
-
             logging.info('response=>'+response)
             writer.write(response.encode('utf8'))
             await writer.drain()
@@ -80,13 +91,18 @@ class Node():
         server = await asyncio.start_server(self.handle_client, self.host, self.port)
         await server.serve_forever()
 
+    async def run_server_heartbeat(self):
+        server_task = asyncio.create_task(self.run_server())
+        heart_beat = asyncio.create_task(self.heart_beat())
+        await server_task
+        await heart_beat
+
+
 async def main(port):
     host,port = 'localhost',port
-    node = Node(host=host,port=port,peers={'localhost:8000':['localhost',8000]})
+    node = Node(host=host,port=port)
     logging.info(f'Server is about to start on {host}:{port}')
-    await node.run_server()
-
-
+    await node.run_server_heartbeat()
 
 if __name__ == '__main__':
     logger = logging.getLogger()
@@ -94,3 +110,5 @@ if __name__ == '__main__':
     logging.basicConfig(format='%(levelname)s  %(asctime)s  %(message)s',
                         datefmt='%d/%m/%Y %I:%M:%S %p')
     asyncio.run(main(sys.argv[1]))
+
+

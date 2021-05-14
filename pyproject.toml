@@ -8,6 +8,7 @@ authors = ["Amod Wani <amodwani04@gmail.com>"]
 python = "^3.9"
 starlette = "^0.14.2"
 aiohttp = "^3.7.4"
+ipython = "^7.23.1"
 
 [tool.poetry.dev-dependencies]
 pytest = "^5.2"
