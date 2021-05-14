@@ -12,13 +12,13 @@ NO_IDEA = 'no_idea'
 class Node():
     def __init__(self,host:str,
                 port:int,
-                peers:Dict[str:str]) -> None:
+                peers={}) -> None:
         self.host = host
         self.port = port
         self.name = host+':'+str(port)
-        self.peers = {self.name:NO_IDEA}
+        self.peers = peers.update({self.name:NO_IDEA})
 
-    async def _loop_server(self,server_map ) -> List[Tuple[Tuple[str,int], str]]:
+    async def _loop_server(self,server_map ) :
         result = await asyncio.gather(self.send_msg(
                 message='ping',
                 host=host,port=port
@@ -26,13 +26,13 @@ class Node():
         return result
 
     async def send_msg(self,message:str,
-                        host:str,port:int) -> Tuple[str,int]:
+                        host:str,port:int):
         if f'{host}:{port}' == self.name:
             return f'{host}:{port}','pong'
         else:
             try:
                 reader, writer = await asyncio.open_connection(host,port)
-                writer.write(f'{self.name}=>{str.encode(message)}')
+                writer.write(str.encode(f'{self.name}=>{message})'))
                 await writer.drain()
                 data = await reader.read(255)
                 return f'{host}:{port}',data.decode('utf8')
@@ -55,8 +55,9 @@ class Node():
             elif request.startswith('join'):
                 command,data = request.strip().split(' ')
                 host,port = data.split(':')
-                server_res = await self.send_msg(message='ping',
+                server_name ,server_res = await self.send_msg(message='ping',
                                                  host=host,port=int(port))
+                logging.error( server_res)
                 if server_res == 'pong':
                     self.peers[host+':'+port] = 'Secondary'
                     response = 'Server joined the network'
@@ -100,7 +101,7 @@ class Node():
 
 async def main(port):
     host,port = 'localhost',port
-    node = Node(host=host,port=port)
+    node = Node(host=host,port=port,peers={})
     logging.info(f'Server is about to start on {host}:{port}')
     await node.run_server_heartbeat()
 

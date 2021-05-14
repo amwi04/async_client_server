@@ -10,7 +10,7 @@ async def echo_client(address):
     while True:
         command = input('command=')
         if command:
-            writer.write('client=>'+str.encode(command))
+            writer.write(str.encode('client=>'+command))
             await writer.drain()
 
             print('waiting for response')
