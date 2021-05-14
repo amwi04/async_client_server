@@ -3,7 +3,7 @@ import sys
 from random import randint
 import logging
 from codecs import StreamReader,StreamWriter
-from typing import List, Tuple
+from typing import Dict, List, Tuple
 
 PRIMARY = 'primary'
 SECONDARY = 'secondary'
@@ -12,49 +12,42 @@ NO_IDEA = 'no_idea'
 class Node():
     def __init__(self,host:str,
                 port:int,
-                peers={}) -> None:
+                peers:Dict[str:str]) -> None:
         self.host = host
         self.port = port
         self.name = host+':'+str(port)
-        self.peers = peers
+        self.peers = {self.name:NO_IDEA}
 
-    async def _loop_server(self) -> List[Tuple[Tuple[str,int], str]]:
+    async def _loop_server(self,server_map ) -> List[Tuple[Tuple[str,int], str]]:
         result = await asyncio.gather(self.send_msg(
                 message='ping',
                 host=host,port=port
-                ) for name,(host,port) in self.peers.items())
+                ) for name,(host,port) in server_map.items())
         return result
 
-    async def heart_beat(self) -> None:
-        peer = {}
-        while True:
-            await self._loop_server()
-            await asyncio.sleep(10)
-
     async def send_msg(self,message:str,
-                        host:str,port:int) -> Tuple[
-                                            Tuple[str,int], str
-                                            ]:
+                        host:str,port:int) -> Tuple[str,int]:
         if f'{host}:{port}' == self.name:
-            return (host,port),'pong'
+            return f'{host}:{port}','pong'
         else:
             try:
                 reader, writer = await asyncio.open_connection(host,port)
-                writer.write(str.encode(message))
+                writer.write(f'{self.name}=>{str.encode(message)}')
                 await writer.drain()
                 data = await reader.read(255)
-                return (host,port),data.decode('utf8')
+                return f'{host}:{port}',data.decode('utf8')
             except Exception as e:
                 logging.error(f'No response from server {e}')
-                return (host,port),f'Error {e}'
+                return f'{host}:{port}',f'Error {e}'
 
     async def handle_client(self,
                         reader:StreamReader,
                         writer:StreamWriter) -> None:
         request = None
         while True:
-            request = (await reader.read(255)).decode('utf8').lower()
-            logging.info('request=>'+request)
+            source_request = (await reader.read(255)).decode('utf8').lower()
+            logging.info('source_request=>'+source_request)
+            source,request = source_request.split('=>')
             if request == 'quit':
                 logging.info('Disconnecting Client')
                 response = 'Disconnecting'
@@ -62,15 +55,15 @@ class Node():
             elif request.startswith('join'):
                 command,data = request.strip().split(' ')
                 host,port = data.split(':')
-                logging.info('join host:port =>' + data )
                 server_res = await self.send_msg(message='ping',
                                                  host=host,port=int(port))
-                logging.info('join server response='+server_res)
                 if server_res == 'pong':
                     self.peers[host+':'+port] = 'Secondary'
                     response = 'Server joined the network'
+                    logging.info(f'Server joined the network {host}:{port}')
                 else:
                     response = 'Server did not respond with pong'
+                    logging.warning(f'Server did not respond with pong {host}:{port}')
             elif request.startswith('ping'):
                 response = 'pong'
             elif request.startswith('server'):
@@ -90,6 +83,13 @@ class Node():
     async def run_server(self):
         server = await asyncio.start_server(self.handle_client, self.host, self.port)
         await server.serve_forever()
+
+    async def heart_beat(self) -> None:
+        while True:
+            server_status = await self._loop_server(self.peers)
+            for name,status in server_status:
+                self.peers[name] = status
+            await asyncio.sleep(10)
 
     async def run_server_heartbeat(self):
         server_task = asyncio.create_task(self.run_server())
