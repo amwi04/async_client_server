@@ -1,3 +1,4 @@
+from __future__ import annotations
 import asyncio
 import sys
 import ujson
@@ -21,6 +22,9 @@ class Node():
         peers.update({self.name:NO_IDEA})
         self.peers = peers
 
+    def __repr__(self) -> str:
+        return self.name
+
     async def _loop_server(self,server_map ) :
         result = await asyncio.gather(self.send_msg(
                 message='ping',
@@ -36,7 +40,7 @@ class Node():
         else:
             try:
                 reader, writer = await asyncio.open_connection(host,port)
-                writer.write(str.encode(f'{self.name}=>{message})'))
+                writer.write(str.encode(f'{self.name}=>{message}'))
                 await writer.drain()
                 data = await reader.read(255)
                 return f'{host}:{port}',data.decode('utf8')
@@ -57,29 +61,35 @@ class Node():
                 response = 'Disconnecting'
                 break
             elif request.startswith('join'):
-                command,data = request.strip().split(' ')
-                host,port = data.split(':')
-                server_name ,server_res = await self.send_msg(message='ping',
-                                                 host=host,port=int(port))
-                if server_res == 'pong':
-                    self.peers[host+':'+port] = NO_IDEA
-                    await self.send_msg(message=f'sync_peers|{str(self.peers)}',host=host,port=port)
-                    response = 'Server joined the network'
-                    logging.info(f'Server joined the network {host}:{port}')
+                if self.peers[self.name] == PRIMARY:
+                    command,data = request.strip().split(' ')
+                    host,port = data.split(':')
+                    logging.info(f'Checking if server responds {host}:{port}')
+                    server_name ,server_res = await self.send_msg(message='ping',
+                                                    host=host,port=int(port))
+                    if server_res == 'pong':
+                        logging.info(f'Server responded with pong {host}:{port}')
+                        self.peers[host+':'+port] = SECONDARY
+                        await self.send_msg(message=f'new_join_peers|{ujson.dumps(self.peers)}',host=host,port=port)
+                        response = 'Server joined the network'
+                        logging.info(f'Server joined the network {host}:{port}')
+                    else:
+                        response = 'Server did not respond with pong'
+                        logging.warning(f'Server did not respond with pong {host}:{port}')
                 else:
-                    response = 'Server did not respond with pong'
-                    logging.warning(f'Server did not respond with pong {host}:{port}')
+                    response = f'Primary servers { ''.join([key for key,value in self.peers.items if key == PRIMARY ])}'
             elif request.startswith('ping'):
                 response = 'pong'
             elif request.startswith('server'):
                 response = self.name
             elif request.startswith('peers_list'):
-                response = str(self.peers)
+                response = ujson.dumps(self.peers)
             elif request.startswith('check_peers'):
-                response = str(self.peers)
-            elif request.startswith('sync_peers'):
+                response =  ujson.dumps(await self._loop_server(self.peers))
+            elif request.startswith('new_join_peers'):
                 command, peers = request.split('|')
                 self.peers = ujson.loads(peers)
+                response = f'Send the existing peers data to new joining peers'
             else:
                 response = str(f'Got request {request}')
             logging.info('response=>'+response)
