@@ -61,6 +61,8 @@ class Node():
         request = None
         while True:
             source_request = (await reader.read(255)).decode('utf8').lower()
+            if not source_request:
+                continue
             logging.info('source_request=>'+source_request)
             source,request = source_request.split('=>')
 
@@ -70,24 +72,26 @@ class Node():
                 break
 
             elif request.startswith('join'):
-                command,data = request.strip().split(' ')
-                logging.info(f'Checking if server responds {data}')
-                server_name ,server_res = await self.send_msg(message='ping',
-                                                server_name = data )
-                if server_res == 'pong':
-                    logging.info(f'Server responded with pong {data}')
-                    self.peers[data] = NO_IDEA
-                    if [key for key,value in self.peers.items() if value == PRIMARY ]:
-                        self.peers[data] = SECONDARY
-                    server_name ,server_res = await self.send_msg(
-                            message=f'new_join_peers|{ujson.dumps(self.peers)}',
-                            server_name=data)
-                    response = 'Server joined the network'
-                    logging.info(f'Server joined the network {data}')
+                if self.peers[self.name] == PRIMARY:
+                    command,data = request.strip().split(' ')
+                    logging.info(f'Checking if server responds {data}')
+                    server_name ,server_res = await self.send_msg(message='ping',
+                                                    server_name = data )
+                    if server_res == 'pong':
+                        logging.info(f'Server responded with pong {data}')
+                        self.peers[data] = NO_IDEA
+                        if [key for key,value in self.peers.items() if value == PRIMARY ]:
+                            self.peers[data] = SECONDARY
+                        server_name ,server_res = await self.send_msg(
+                                message=f'new_join_peers|{ujson.dumps(self.peers)}',
+                                server_name=data)
+                        response = 'Server joined the network'
+                        logging.info(f'Server joined the network {data}')
+                    else:
+                        response = 'Server did not respond with pong'
+                        logging.warning(f'Server did not respond with pong {data}')
                 else:
-                    response = 'Server did not respond with pong'
-                    logging.warning(f'Server did not respond with pong {data}')
-
+                    respond = 'Only primary can add'
             elif request.startswith('ping'):
                 response = 'pong'
 
