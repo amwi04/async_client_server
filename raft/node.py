@@ -1,5 +1,7 @@
 from __future__ import annotations
 import asyncio
+from email import message
+from socket import send_fds
 import sys
 import ujson
 from random import randint
@@ -25,20 +27,25 @@ class Node():
     def __repr__(self) -> str:
         return self.name
 
-    async def _loop_server(self,server_map ) :
-        result = await asyncio.gather(self.send_msg(
-                message='ping',
-                host=host,port=port
-                ) for name,(host,port) in server_map.items())
+    async def _loop_server(self, message, server_map ) :
+        result = await asyncio.gather(
+            *[self.send_msg(
+                message=message,
+                server_name = name
+                ) for name,status in server_map.items()
+                ], return_exceptions=True
+            )
         logging.info(f'_loop_server=> {result}')
         return result
 
     async def send_msg(self,message:str,
-                        host:str,port:int):
-        if f'{host}:{port}' == self.name:
-            return f'{host}:{port}','pong'
+                        server_name:str):
+        if server_name == self.name:
+            await asyncio.sleep(0.01)
+            return f'{server_name}','pong'
         else:
             try:
+                host,port = server_name.split(':')
                 reader, writer = await asyncio.open_connection(host,port)
                 writer.write(str.encode(f'{self.name}=>{message}'))
                 await writer.drain()
@@ -56,40 +63,75 @@ class Node():
             source_request = (await reader.read(255)).decode('utf8').lower()
             logging.info('source_request=>'+source_request)
             source,request = source_request.split('=>')
+
             if request == 'quit':
                 logging.info('Disconnecting Client')
                 response = 'Disconnecting'
                 break
+
             elif request.startswith('join'):
-                if self.peers[self.name] == PRIMARY:
-                    command,data = request.strip().split(' ')
-                    host,port = data.split(':')
-                    logging.info(f'Checking if server responds {host}:{port}')
-                    server_name ,server_res = await self.send_msg(message='ping',
-                                                    host=host,port=int(port))
-                    if server_res == 'pong':
-                        logging.info(f'Server responded with pong {host}:{port}')
-                        self.peers[host+':'+port] = SECONDARY
-                        await self.send_msg(message=f'new_join_peers|{ujson.dumps(self.peers)}',host=host,port=port)
-                        response = 'Server joined the network'
-                        logging.info(f'Server joined the network {host}:{port}')
-                    else:
-                        response = 'Server did not respond with pong'
-                        logging.warning(f'Server did not respond with pong {host}:{port}')
+                command,data = request.strip().split(' ')
+                logging.info(f'Checking if server responds {data}')
+                server_name ,server_res = await self.send_msg(message='ping',
+                                                server_name = data )
+                if server_res == 'pong':
+                    logging.info(f'Server responded with pong {data}')
+                    self.peers[data] = NO_IDEA
+                    if [key for key,value in self.peers.items() if value == PRIMARY ]:
+                        self.peers[data] = SECONDARY
+                    server_name ,server_res = await self.send_msg(
+                            message=f'new_join_peers|{ujson.dumps(self.peers)}',
+                            server_name=data)
+                    response = 'Server joined the network'
+                    logging.info(f'Server joined the network {data}')
                 else:
-                    response = f'Primary servers { ''.join([key for key,value in self.peers.items if key == PRIMARY ])}'
+                    response = 'Server did not respond with pong'
+                    logging.warning(f'Server did not respond with pong {data}')
+
             elif request.startswith('ping'):
                 response = 'pong'
+
             elif request.startswith('server'):
                 response = self.name
+
             elif request.startswith('peers_list'):
                 response = ujson.dumps(self.peers)
+
             elif request.startswith('check_peers'):
-                response =  ujson.dumps(await self._loop_server(self.peers))
+                result = await self._loop_server(message='ping',server_map= self.peers)
+                response =  ujson.dumps(result)
+
             elif request.startswith('new_join_peers'):
                 command, peers = request.split('|')
                 self.peers = ujson.loads(peers)
                 response = f'Send the existing peers data to new joining peers'
+
+            elif request.startswith('make'):
+                command, server_type, server_name = request.strip().split(' ')
+                if server_type.lower() == PRIMARY:
+                    logging.info(f'making primary {server_type} and {server_name}')
+                    if primary_server := [key for key,value in self.peers.items() if value == PRIMARY ]:
+                        response = f'Primary already avaliable {primary_server}'
+                    else:
+                        self.peers[server_name] = PRIMARY
+                        for name,status in self.peers.items():
+                            if status == NO_IDEA:
+                                self.peers[self.name] = SECONDARY
+                        result = await self._loop_server(
+                                message=f'primary_sync {self.peers[self.name]} {ujson.dumps(self.peers)}',
+                                server_map = self.peers)
+                        response = f'Added server details to all servers {ujson.dumps(self.peers)}'
+                else:
+                    response = f'Only primary server can do primary sync'
+                    logging.info(f'Only primary server can do primary sync')
+
+            elif request.startswith('primary_sync'):
+                command,server_status,servers = request.split(' ')
+                if server_status == PRIMARY:
+                    self.peers = ujson.loads(servers)
+                    response = f'Adding all server data...'
+                else:
+                    response = f'Only primary server can do primary sync'
             else:
                 response = str(f'Got request {request}')
             logging.info('response=>'+response)
@@ -105,22 +147,25 @@ class Node():
     async def heart_beat(self) -> None:
         while True:
             beat_peer = {}
-            server_status = await self._loop_server(self.peers)
+            server_status = await self._loop_server( message='ping',server_map=self.peers)
             logging.info('Heart beat')
             for name,status in server_status:
                 if status.startswith(UNAVAILABLE):
                     logging.error('heartbeat failed for => {name} removing...')
+                    beat_peer[name] = UNAVAILABLE
                     continue
-                beat_peer[name] = status
-            self.peers = beat_peer
-            logging.info(f'heart beat {str(self.peers)}')
+                elif status == 'pong':
+                    beat_peer[name] = 'pong'
+
+            logging.info(f'heart beat status {str(beat_peer)} =={ str(self.peers)}')
+
             await asyncio.sleep(10)
 
     async def run_server_heartbeat(self):
         server_task = asyncio.create_task(self.run_server())
-        heart_beat = asyncio.create_task(self.heart_beat())
+        # heart_beat = asyncio.create_task(self.heart_beat())
         await server_task
-        await heart_beat
+        # await heart_beat
 
 
 async def main(port):
