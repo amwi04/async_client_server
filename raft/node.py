@@ -1,10 +1,6 @@
-from __future__ import annotations
 import asyncio
-from email import message
-from socket import send_fds
 import sys
 import ujson
-from random import randint
 import logging
 from codecs import StreamReader,StreamWriter
 from typing import Dict, List, Tuple
@@ -35,7 +31,6 @@ class Node():
                 ) for name,status in server_map.items()
                 ], return_exceptions=True
             )
-        logging.info(f'_loop_server=> {result}')
         return result
 
     async def send_msg(self,message:str,
@@ -79,12 +74,16 @@ class Node():
                                                     server_name = data )
                     if server_res == 'pong':
                         logging.info(f'Server responded with pong {data}')
-                        self.peers[data] = NO_IDEA
+                        set_status= NO_IDEA
                         if [key for key,value in self.peers.items() if value == PRIMARY ]:
-                            self.peers[data] = SECONDARY
+                            set_status= SECONDARY
+                        self.peers[data] = set_status
                         server_name ,server_res = await self.send_msg(
                                 message=f'new_join_peers|{ujson.dumps(self.peers)}',
                                 server_name=data)
+                        other_server = { k:v for k,v in self.peers.items() if k != data }
+                        await self._loop_server(
+                            message=f'update_server {data} {set_status}', server_map = other_server)
                         response = 'Server joined the network'
                         logging.info(f'Server joined the network {data}')
                     else:
@@ -136,6 +135,10 @@ class Node():
                     response = f'Adding all server data...'
                 else:
                     response = f'Only primary server can do primary sync'
+            elif request.startswith('update server'):
+                command, server_details, server_status = request.strip().split(' ')
+                self.peers[server_details] = server_status
+                logging.info(f'Updating {server_details} {server_status}')
             else:
                 response = str(f'Got request {request}')
             logging.info('response=>'+response)
