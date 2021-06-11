@@ -42,6 +42,7 @@ class Node():
             try:
                 host,port = server_name.split(':')
                 reader, writer = await asyncio.open_connection(host,port)
+                print(reader,writer)
                 writer.write(str.encode(f'{self.name}=>{message}'))
                 await writer.drain()
                 data = await reader.read(255)
@@ -80,8 +81,11 @@ class Node():
                         self.peers[data] = set_status
                         server_name ,server_res = await self.send_msg(
                                 message=f'new_join_peers|{ujson.dumps(self.peers)}',
-                                server_name=data)
-                        other_server = { k:v for k,v in self.peers.items() if k != data }
+                                server_name=data)                                                      # send to nre joiner
+                        # lets tell everyone some one join
+                        other_server = { 
+                                k:v for k,v in self.peers.items() if k != data or k != self.name
+                            }
                         await self._loop_server(
                             message=f'update_server {data} {set_status}', server_map = other_server)
                         response = 'Server joined the network'
@@ -90,7 +94,7 @@ class Node():
                         response = 'Server did not respond with pong'
                         logging.warning(f'Server did not respond with pong {data}')
                 else:
-                    respond = 'Only primary can add'
+                    response = 'Only primary can add'
             elif request.startswith('ping'):
                 response = 'pong'
 
@@ -110,7 +114,12 @@ class Node():
                 response = f'Send the existing peers data to new joining peers'
 
             elif request.startswith('make'):
-                command, server_type, server_name = request.strip().split(' ')
+                len_req = len(request.strip().split(' '))
+                if len_req == 3:
+                    command, server_type, server_name = request.strip().split(' ')
+                elif len_req == 2:
+                    command, server_type = request.strip().split(' ')
+                    server_name = self.name
                 if server_type.lower() == PRIMARY:
                     logging.info(f'making primary {server_type} and {server_name}')
                     if primary_server := [key for key,value in self.peers.items() if value == PRIMARY ]:
@@ -135,10 +144,12 @@ class Node():
                     response = f'Adding all server data...'
                 else:
                     response = f'Only primary server can do primary sync'
-            elif request.startswith('update server'):
+            elif request.startswith('update_server'):
+                logging.warning(request)
                 command, server_details, server_status = request.strip().split(' ')
                 self.peers[server_details] = server_status
                 logging.info(f'Updating {server_details} {server_status}')
+                response = f'Updating {server_details} {server_status}' 
             else:
                 response = str(f'Got request {request}')
             logging.info('response=>'+response)
