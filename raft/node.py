@@ -4,7 +4,7 @@ import ujson
 import logging
 from codecs import StreamReader,StreamWriter
 from typing import Dict, List, Tuple
-
+import time
 PRIMARY = 'primary'
 SECONDARY = 'secondary'
 NO_IDEA = 'no_idea'
@@ -61,7 +61,7 @@ class Node():
                 continue
             logging.info('source_request=>'+source_request)
             source,request = source_request.split('=>')
-
+            start_time = time.time()
             if request == 'quit':
                 logging.info('Disconnecting Client')
                 response = 'Disconnecting'
@@ -138,6 +138,7 @@ class Node():
                     logging.info(f'Only primary server can do primary sync')
 
             elif request.startswith('primary_sync'):
+                # make primary will use this
                 command,server_status,servers = request.split(' ')
                 if server_status == PRIMARY:
                     self.peers = ujson.loads(servers)
@@ -153,7 +154,7 @@ class Node():
             else:
                 response = str(f'Got request {request}')
             logging.info('response=>'+response)
-            writer.write(response.encode('utf8'))
+            writer.write(f'{time.time() - start_time} : {response}'.encode('utf8'))
             await writer.drain()
         writer.close()
 
