@@ -36,55 +36,70 @@ class Node():
     async def send_msg(self,message:str,
                         server_name:str):
         if server_name == self.name:
-            await asyncio.sleep(0 )
+            await asyncio.sleep(0)
             return f'{server_name}','pong'
         else:
+            host,port = server_name.split(':')
+            reader, writer = await asyncio.open_connection(host,port)
             try:
-                host,port = server_name.split(':')
-                logging.error(f'{host}:{port} ====--> {message}')
-                reader, writer = await asyncio.open_connection(host,port)
                 writer.write(str.encode(f'{self.name}=>{message}'))
                 await writer.drain()
                 data = await reader.read(255)
+                #logging.error(f'in send_msg data: {data}: ====')
                 return f'{host}:{port}',data.decode('utf8')
             except Exception as e:
-                logging.error(f'No response from server {e}')
+                #logging.error(f'No response from server {e}')
                 return f'{host}:{port}',f'{UNAVAILABLE} :: {e}'
             finally:
                 writer.close()
     async def _internal_stuff_to_terminate(self,request):
+        logging.info(f'in _internal_stuff_terminate :{request}:')
         if request.startswith('ping'):
             response = 'pong'
-
         elif request.startswith('new_join_peers'):
             command, peers = request.split('|')
-            logging.info(f'IN new join peers {command}:{peers}')
             self.peers = ujson.loads(peers)
             response = f'Send the existing peers data to new joining peers'
+        elif request.startswith('primary_sync'):
+            # make primary will use this
+            command,server_status,servers = request.split(' ')
+            if server_status == PRIMARY:
+                self.peers = ujson.loads(servers)
+                response = f'Adding all server data...'
+            else:
+                response = f'Only primary server can do primary sync'
+        elif request.startswith('update_server'):
+            #logging.warning(request)
+            command, server_details, server_status = request.strip().split(' ')
+            self.peers[server_details] = server_status
+            #logging.info(f'Updating {server_details} {server_status}')
+            response = f'Updating {server_details} {server_status}' 
         else:
             response = f'Not fount command for inertnal stuff {request}'
         return response
     async def _client_stuff_no_terminate(self,request):
         if request == 'quit':
-            logging.info('Disconnecting Client')
+            #logging.info('Disconnecting Client')
             response = 'Disconnecting'
 
         elif request.startswith('join'):
             if self.peers[self.name] == PRIMARY:
                 command,data = request.strip().split(' ')
-                logging.info(f'Checking if server responds {data}')
+                #logging.info(f'Checking if server responds {data}')
                 server_name ,server_res = await self.send_msg(message='ping',
                                                 server_name = data )
-                logging.info(f'Server respondes with : "{server_res}"')
+                logging.info(f'Server respondes with :{server_res}:')
                 if server_res == 'pong':
+                    logging.log('In pong==')
                     set_status= NO_IDEA
                     if [key for key,value in self.peers.items() if value == PRIMARY ]:
                         set_status= SECONDARY
                     self.peers[data] = set_status
+                    logging.log(f'Adding new server host:port:status to primary:{str(self.peers)}')
                     server_name ,server_res = await self.send_msg(
                             message=f'new_join_peers|{ujson.dumps(self.peers)}',
                             server_name=data)                                                      # send to nre joiner
-                    logging.error(f' fault finding====={server_res}')
+                    logging.error(f'Send current peers to newly added with response :{server_res}:')
                     # lets tell everyone some one join
                     other_server = { 
                             k:v for k,v in self.peers.items() if k != data or k != self.name
@@ -92,14 +107,14 @@ class Node():
                     await self._loop_server(
                         message=f'update_server {data} {set_status}', server_map = other_server)
                     response = 'Server joined the network'
-                    logging.info(f'Server joined the network {data}')
+                    #logging.info(f'Server joined the network {data}')
                 else:
                     response = 'Server did not respond with pong'
-                    logging.warning(f'Server did not respond with pong {data}')
+                    #logging.warning(f'Server did not respond with pong {data}')
             else:
                 response = 'Only primary can add'
-        elif request.startswith('ping'):
-            response = 'pong'
+        # elif request.startswith('ping'):
+        #     response = 'pong'
 
         elif request.startswith('server'):
             response = self.name
@@ -119,7 +134,7 @@ class Node():
                 command, server_type = request.strip().split(' ')
                 server_name = self.name
             if server_type == PRIMARY:
-                logging.info(f'making primary {server_type} and {server_name}')
+                #logging.info(f'making primary {server_type} and {server_name}')
                 if primary_server := [key for key,value in self.peers.items() if value == PRIMARY ]:
                     response = f'Primary already avaliable {primary_server}'
                 else:
@@ -133,22 +148,14 @@ class Node():
                     response = f'Added server details to all servers {ujson.dumps(self.peers)}'
             else:
                 response = f'Only primary server can do primary sync'
-                logging.info(f'Only primary server can do primary sync')
+                #logging.info(f'Only primary server can do primary sync')
 
-        elif request.startswith('primary_sync'):
-            # make primary will use this
-            command,server_status,servers = request.split(' ')
-            if server_status == PRIMARY:
-                self.peers = ujson.loads(servers)
-                response = f'Adding all server data...'
-            else:
-                response = f'Only primary server can do primary sync'
-        elif request.startswith('update_server'):
-            logging.warning(request)
-            command, server_details, server_status = request.strip().split(' ')
-            self.peers[server_details] = server_status
-            logging.info(f'Updating {server_details} {server_status}')
-            response = f'Updating {server_details} {server_status}' 
+
+        # elif request.startswith('new_join_peers'):
+        #     command, peers = request.split('|')
+        #     #logging.info(f'IN new join peers {command}:{peers}')
+        #     self.peers = ujson.loads(peers)
+        #     response = f'Send the existing peers data to new joining peers'
         else:
             response = str(f'Got request {request}')
         return response
@@ -161,16 +168,18 @@ class Node():
             source_request = (await reader.read(255)).decode('utf8').lower()
             if not source_request:
                 continue
-            logging.info('source_request=>'+source_request)
+            logging.info(f'While True source_request==:{source_request}:')
             source,request = source_request.split('=>')
-            logging.error(f'{source}=================')
             start_time = time.time()
+            #logging.error(f'{request}=================')
             if source.startswith('client'):
                 response = await self._client_stuff_no_terminate(request=request)
+                #logging.info(f'{time.time() - start_time } :response=>'+response)
             else:
                 response = await self._internal_stuff_to_terminate(request=request)
             writer.write(response.encode('utf8'))
             await writer.drain()
+            # data = await reader.read(255)
             logging.info(f'{time.time() - start_time } :response=>'+response)
             if response == 'Disconnecting' or source != 'client' :
                 writer.close()
@@ -184,16 +193,16 @@ class Node():
         while True:
             beat_peer = {}
             server_status = await self._loop_server( message='ping',server_map=self.peers)
-            logging.info('Heart beat')
+            #logging.info('Heart beat')
             for name,status in server_status:
                 if status.startswith(UNAVAILABLE):
-                    logging.error('heartbeat failed for => {name} removing...')
+                    #logging.error('heartbeat failed for => {name} removing...')
                     beat_peer[name] = UNAVAILABLE
                     continue
                 elif status == 'pong':
                     beat_peer[name] = 'pong'
 
-            logging.info(f'heart beat status {str(beat_peer)} =={ str(self.peers)}')
+            #logging.info(f'heart beat status {str(beat_peer)} =={ str(self.peers)}')
 
             await asyncio.sleep(10)
 
@@ -214,7 +223,8 @@ if __name__ == '__main__':
     logger = logging.getLogger()
     logger.setLevel(logging.INFO)
     logging.basicConfig(format='%(levelname)s  %(asctime)s  %(message)s',
-                        datefmt='%d/%m/%Y %I:%M:%S %p')
+                         datefmt='%I:%M:%S')
+                    #    datefmt='%d/%m/%Y %I:%M:%S %p')
     asyncio.run(main(sys.argv[1]))
 
 

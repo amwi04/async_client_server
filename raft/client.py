@@ -7,7 +7,9 @@ async def echo_client(address):
     reader, writer = await asyncio.open_connection(*address)
     while True:
         command = input('command=')
+        # command = 'aa'
         if command:
+            # writer.write(str.encode('{"source":"client-'+ address[0] + '-' + address[1] + '","command":"'+ command +'"}'))
             writer.write(str.encode('client=>'+command))
             await writer.drain()
 
