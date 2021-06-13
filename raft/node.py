@@ -4,11 +4,14 @@ import ujson
 import logging
 from codecs import StreamReader,StreamWriter
 from typing import Dict, List, Tuple
-import time
+import time, platform
 PRIMARY = 'primary'
 SECONDARY = 'secondary'
 NO_IDEA = 'no_idea'
 UNAVAILABLE = 'unavailable'
+
+if platform.system() == 'Windows':
+    asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
 
 class Node():
     def __init__(self,host:str,
@@ -42,22 +45,23 @@ class Node():
             host,port = server_name.split(':')
             reader, writer = await asyncio.open_connection(host,port)
             try:
+                logging.error(f'in send_msg() message:{type(message)}<> host:port-{host}:{port}- ====')
                 writer.write(str.encode(f'{self.name}=>{message}'))
                 await writer.drain()
                 data = await reader.read(255)
-                #logging.error(f'in send_msg data: {data}: ====')
                 return f'{host}:{port}',data.decode('utf8')
             except Exception as e:
                 #logging.error(f'No response from server {e}')
                 return f'{host}:{port}',f'{UNAVAILABLE} :: {e}'
-            finally:
-                writer.close()
+            # finally:
+            #     writer.close()
     async def _internal_stuff_to_terminate(self,request):
         logging.info(f'in _internal_stuff_terminate :{request}:')
         if request.startswith('ping'):
             response = 'pong'
         elif request.startswith('new_join_peers'):
             command, peers = request.split('|')
+            logging.info(f'new_join_peers=peers{peers}=')
             self.peers = ujson.loads(peers)
             response = f'Send the existing peers data to new joining peers'
         elif request.startswith('primary_sync'):
@@ -90,12 +94,11 @@ class Node():
                                                 server_name = data )
                 logging.info(f'Server respondes with :{server_res}:')
                 if server_res == 'pong':
-                    logging.log('In pong==')
                     set_status= NO_IDEA
                     if [key for key,value in self.peers.items() if value == PRIMARY ]:
                         set_status= SECONDARY
                     self.peers[data] = set_status
-                    logging.log(f'Adding new server host:port:status to primary:{str(self.peers)}')
+                    logging.info(f'Adding new server host:port:status to primary:{str(self.peers)}')
                     server_name ,server_res = await self.send_msg(
                             message=f'new_join_peers|{ujson.dumps(self.peers)}',
                             server_name=data)                                                      # send to nre joiner
@@ -151,11 +154,11 @@ class Node():
                 #logging.info(f'Only primary server can do primary sync')
 
 
-        # elif request.startswith('new_join_peers'):
-        #     command, peers = request.split('|')
-        #     #logging.info(f'IN new join peers {command}:{peers}')
-        #     self.peers = ujson.loads(peers)
-        #     response = f'Send the existing peers data to new joining peers'
+        elif request.startswith('new_join_peers'):
+            command, peers = request.split('|')
+            #logging.info(f'IN new join peers {command}:{peers}')
+            self.peers = ujson.loads(peers)
+            response = f'Send the existing peers data to new joining peers'
         else:
             response = str(f'Got request {request}')
         return response
@@ -165,24 +168,25 @@ class Node():
                         writer:StreamWriter) -> None:
         request = None
         while True:
+            logging.info(f'request {request}')
             source_request = (await reader.read(255)).decode('utf8').lower()
             if not source_request:
                 continue
             logging.info(f'While True source_request==:{source_request}:')
             source,request = source_request.split('=>')
             start_time = time.time()
-            #logging.error(f'{request}=================')
             if source.startswith('client'):
                 response = await self._client_stuff_no_terminate(request=request)
-                #logging.info(f'{time.time() - start_time } :response=>'+response)
             else:
                 response = await self._internal_stuff_to_terminate(request=request)
             writer.write(response.encode('utf8'))
             await writer.drain()
             # data = await reader.read(255)
             logging.info(f'{time.time() - start_time } :response=>'+response)
+
             if response == 'Disconnecting' or source != 'client' :
                 writer.close()
+                break                   #this shot took 2days god
 
 
     async def run_server(self):

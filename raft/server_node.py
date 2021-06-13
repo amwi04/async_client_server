@@ -30,9 +30,12 @@ class Node:
     def __repr__(self) -> str:
         return f'{self.host}:{self.port}'
 
+    async def _send_msg(message:str,sever:str):
+
+
     async def _loop_conn(self,servers:set,message:str):
         result = await asyncio.gather(
-            *[self.send_msg(
+            *[self._send_msg(
                 message=message,
                 server = server
                 ) for server in servers

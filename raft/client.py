@@ -1,6 +1,8 @@
 import asyncio
-import sys
+import sys,platform
 
+if platform.system() == 'Windows':
+    asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
 event_loop = asyncio.get_event_loop()
 
 async def echo_client(address):
